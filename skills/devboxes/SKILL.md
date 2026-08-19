@@ -5,7 +5,7 @@ description: Create, navigate, hydrate, and tear down Namespace devboxes - linux
 
 # Namespace devboxes
 
-A Namespace devbox is a `linux/amd64` VM with Docker available. This skill describes the general building blocks for working with devboxes - creating them, transferring files, hydrating a workspace, installing toolchains, running commands over `devbox ssh`, and the lifecycle commands.
+A Namespace devbox is a `linux/amd64` VM with Docker available. This skill describes the general building blocks for working with devboxes - creating them, transferring files, hydrating a workspace, installing toolchains, running commands with `devbox exec`, and the lifecycle commands.
 
 Throughout this skill:
 
@@ -39,7 +39,7 @@ Add `--ephemeral` when the devbox does not need to persist after a task is compl
 `--checkout <repo-url>` (e.g. `git@github.com:org/repo.git`) clones the repository into `/workspaces/<repo-name>`. If creation fails because checkout is unavailable for the repo or org:
 
 1. Expire the just-created devbox (`devbox expire <name> --force`) to free capacity.
-2. If `gh` is installed locally, recreate the devbox WITHOUT `--checkout`, then run `devbox setup-github <name>` to forward your `gh` token into the devbox. Once that succeeds, run `git clone --depth=1 <repo-url> /workspaces/<repo-name>` inside the devbox via `devbox ssh <name> --`. Always use `--depth=1` for large monorepos - full clones can run for minutes with no progress output over `devbox ssh` and look identical to a hang. **Important** The forwarded `gh` token authenticates HTTPS only - clone via `https://github.com/<org>/<repo>.git`, not `git@github.com:...`.
+2. If `gh` is installed locally, recreate the devbox WITHOUT `--checkout`, then run `devbox setup-github <name>` to forward your `gh` token into the devbox. Once that succeeds, run `git clone --depth=1 <repo-url> /workspaces/<repo-name>` inside the devbox via `devbox exec <name> --`. Always use `--depth=1` for large monorepos - full clones can run for minutes with sparse progress output and look identical to a hang. **Important** The forwarded `gh` token authenticates HTTPS only - clone via `https://github.com/<org>/<repo>.git`, not `git@github.com:...`.
 3. If `gh` is not installed, or `devbox setup-github` / the in-devbox `git clone` fails, **instruct the user to link their GitHub organization to Namespace** at https://cloud.namespace.so/workspace/workspace/integrations?integration=github - checkout cannot proceed without it.
 
 **Important (case-sensitive org slug)** The Namespace association lookup is case-sensitive on the GitHub org/owner segment of `--checkout`. Use the org/owner casing EXACTLY as it appears in the repo URL the user gave you (or as returned by `git remote -v`). NEVER try alternative casings (e.g. lowercasing the org) as a "fix" when checkout fails.
@@ -63,14 +63,14 @@ devbox download <name> <remote-path> <local-path>
 
 - `<remote-path>` MUST be a full file path. A trailing `/` fails.
 - `--mkdir` creates missing parent directories; it does NOT make the target a directory.
-- The executable bit is NOT preserved. Run `chmod +x` over `devbox ssh` after uploading scripts.
+- The executable bit is NOT preserved. Run `chmod +x` with `devbox exec` after uploading scripts.
 
 ### Hydrate the workspace
 
 Namespace devboxes configured with a repo in the UI auto-clone it to `/workspaces/<repo-name>` on startup. Always check there first before syncing:
 
 ```bash
-devbox ssh <name> -- ls /workspaces/
+devbox exec <name> -- ls /workspaces/
 ```
 
 If the repo is already present, use that path directly. The auto-cloned repo reflects the default branch. When a repository is checked out (auto-cloned or via `--checkout`), align it to the same commit as your local working tree and apply any uncommitted local changes on top.
@@ -83,17 +83,17 @@ git diff "$BASE" > /tmp/changes.patch   # add --binary if the diff touches gener
 
 # Run each command separately - do NOT chain with && via `bash -c`.
 # For git, use `git -C <path>` instead of `cd <path> && git ...`.
-devbox ssh    <name> -- git -C /workspaces/<repo-name> fetch --depth=1 origin "$BASE"
-devbox ssh    <name> -- git -C /workspaces/<repo-name> checkout "$BASE"
+devbox exec   <name> -- git -C /workspaces/<repo-name> fetch --depth=1 origin "$BASE"
+devbox exec   <name> -- git -C /workspaces/<repo-name> checkout "$BASE"
 devbox upload <name> /tmp/changes.patch /tmp/changes.patch
-devbox ssh    <name> -- git -C /workspaces/<repo-name> apply /tmp/changes.patch
-devbox ssh    <name> -- git -C /workspaces/<repo-name> status --short
+devbox exec   <name> -- git -C /workspaces/<repo-name> apply /tmp/changes.patch
+devbox exec   <name> -- git -C /workspaces/<repo-name> status --short
 
 # When multiple steps must share state that cannot be expressed as a single command
 # (e.g. exported env vars, multi-line logic), write a script, upload it, then run it:
 #   devbox upload <name> /tmp/apply.sh /tmp/apply.sh
-#   devbox ssh    <name> -- chmod +x /tmp/apply.sh
-#   devbox ssh    <name> -- bash /tmp/apply.sh
+#   devbox exec   <name> -- chmod +x /tmp/apply.sh
+#   devbox exec   <name> -- bash /tmp/apply.sh
 ```
 
 **Important** `git diff` only covers tracked files. For untracked files, upload them directly with devbox upload, bundle a few into a tarball, or rsync them if there are many.
@@ -118,23 +118,37 @@ If a tool is missing, install only what the workload needs.
 **Important** For every CLI tool the script uses, check if it exists first and install only if missing:
 
 ```bash
-devbox ssh <name> -- apt-get install -y --no-install-recommends \
+devbox exec <name> -- apt-get install -y --no-install-recommends \
     git ca-certificates curl tar build-essential
-devbox ssh <name> -- curl -fsSL -o /tmp/go.tgz https://go.dev/dl/go<version>.linux-amd64.tar.gz
-devbox ssh <name> -- tar -xzf /tmp/go.tgz -C /usr/local
+devbox exec <name> -- curl -fsSL -o /tmp/go.tgz https://go.dev/dl/go<version>.linux-amd64.tar.gz
+devbox exec <name> -- tar -xzf /tmp/go.tgz -C /usr/local
 ```
 
-## 3. Run commands over `devbox ssh`
-**Important** Run `devbox ssh` invocations against different devboxes in parallel. Do NOT serialize independent work.
+## 3. Run commands with `devbox exec`
+**Important** Run `devbox exec` invocations against different devboxes in parallel. Do NOT serialize independent work.
 
 ```bash
-devbox ssh <name> -- <cmd> <args...>
+devbox exec <name> -- <cmd> <args...>
 ```
 
-**Alternative: native ssh** If a workflow uses a tool, which relies on standard SSH tooling (`scp`, `rsync`, etc.), run `devbox configure-ssh <name>` once to write an entry into your `~/.ssh/config`. After that, the devbox is reachable as `<name>.devbox.namespace`. Prefer `devbox ssh` for commands; reach for native ssh when you specifically need standard tooling.
+`devbox ssh <name>` remains available for interactive shells and TTY-dependent workflows. Prefer `devbox exec` for non-interactive commands.
+
+**Alternative: native ssh** If a workflow uses a tool, which relies on standard SSH tooling (`scp`, `rsync`, etc.), run `devbox configure-ssh <name>` once to write an entry into your `~/.ssh/config`. After that, the devbox is reachable as `<name>.devbox.namespace`. Prefer `devbox exec` for commands; reach for native ssh when you specifically need standard tooling.
 
 
-**Important** Run one command per `devbox ssh` invocation. Do NOT chain with `&&`, and do NOT wrap multiple statements with `devbox ssh <name> -- bash -c "a && b"` - argument quoting through `devbox ssh` is unreliable and the script body can be split across argv. For anything beyond a single command, write the script to a file, `devbox upload` it, then `devbox ssh <name> -- bash /tmp/script.sh`.
+**Important** `devbox exec` runs a command directly without a shell. Run one command per invocation; shell operators such as `&&`, redirections, and variable expansion are not interpreted. For anything beyond a single command, write the script to a file, `devbox upload` it, then run `devbox exec <name> -- bash /tmp/script.sh`.
+
+### Detached commands and retained logs
+
+Use `devbox exec -d` for long-running commands. It starts the command, returns immediately, and prints an exec ID. Use that ID to stream retained and live output with `devbox logs`. `devbox logs list` shows previous executions and their status.
+
+```bash
+devbox exec -d <name> -- <cmd> <args...>
+# exec_<id>
+
+devbox logs <name> <exec-id>
+devbox logs list <name>
+```
 
 **Important** Preflight every required CLI before `set -e` so a missing tool exits with a clear message rather than an opaque failure: `command -v <tool> >/dev/null || { echo "MISSING_TOOL: <tool>"; exit 127; }`. On exit 127 or a `MISSING_TOOL` marker, install the dependency and re-run - do NOT report the run as failed.
 
@@ -158,8 +172,8 @@ echo "exit=$status log=$LOG bytes=$(wc -c <"$LOG")"
 exit "$status"
 EOF
 devbox upload <name> /tmp/run.sh /tmp/run.sh
-devbox ssh    <name> -- chmod +x /tmp/run.sh
-devbox ssh    <name> -- bash /tmp/run.sh
+devbox exec   <name> -- chmod +x /tmp/run.sh
+devbox exec   <name> -- bash /tmp/run.sh
 
 # Pull the full log only if the summary shows a non-zero exit.
 # devbox download <name> /workspaces/run.log /tmp/run.log
@@ -173,7 +187,11 @@ For test-runner-specific guidance (sharding, parallel runs, the hydrate-and-test
 
 ```bash
 devbox create --name <name> --image <image> --size <size> [--ephemeral] [--checkout <repo-url>] --purpose "<purpose>"
-devbox ssh <name> -- <cmd>
+devbox exec <name> -- <cmd>
+devbox exec -d <name> -- <cmd>                         # run in the background and print an exec ID
+devbox logs <name> <exec-id>                           # stream retained and live output
+devbox logs list <name>                                # inspect retained executions and status
+devbox ssh <name>                                      # open an interactive shell; prefer exec for commands
 devbox list [-o json]                                  # inspect running devboxes
 devbox upload <name> <local-path> <remote-path>        # transfer files to devbox
 devbox download <name> <remote-path> <local-path>      # retrieve files from devbox
