@@ -5,7 +5,7 @@ description: Create, navigate, hydrate, and tear down Namespace devboxes - linux
 
 # Namespace devboxes
 
-A Namespace devbox is a `linux/amd64` VM with Docker available. This skill describes the general building blocks for working with devboxes - creating them, transferring files, hydrating a workspace, installing toolchains, running commands with `devbox exec`, and the lifecycle commands.
+A Namespace devbox is a `linux/amd64` VM with Docker available. This skill describes the general building blocks for working with devboxes - creating them, transferring files, hydrating a workspace, installing toolchains, running commands with `devbox exec`, sharing web work with teammates through `devbox.so`, and managing the devbox lifecycle.
 
 Throughout this skill:
 
@@ -188,19 +188,55 @@ For test-runner-specific guidance (sharding, parallel runs, the hydrate-and-test
 ```bash
 devbox create --name <name> --image <image> --size <size> [--ephemeral] [--checkout <repo-url>] --purpose "<purpose>"
 devbox exec <name> -- <cmd>
-devbox exec -d <name> -- <cmd>                         # run in the background and print an exec ID
-devbox logs <name> <exec-id>                           # stream retained and live output
-devbox logs list <name>                                # inspect retained executions and status
-devbox ssh <name>                                      # open an interactive shell; prefer exec for commands
-devbox list [-o json]                                  # inspect running devboxes
-devbox upload <name> <local-path> <remote-path>        # transfer files to devbox
-devbox download <name> <remote-path> <local-path>      # retrieve files from devbox
-devbox configure-ssh <name>                            # add to ~/.ssh/config for native ssh/scp/rsync
-devbox port-forward <name> --ports <local:remote,...>  # forward devbox ports to localhost (e.g. a dev server or DB)
-devbox expire <name> --force                           # tear down a devbox
+devbox exec -d <name> -- <cmd>                                     # run in the background and print an exec ID
+devbox logs <name> <exec-id>                                       # stream retained and live output
+devbox logs list <name>                                            # inspect retained executions and status
+devbox ssh <name>                                                  # open an interactive shell; prefer exec for commands
+devbox list [-o json]                                              # inspect running devboxes
+devbox upload <name> <local-path> <remote-path>                    # transfer files to devbox
+devbox download <name> <remote-path> <local-path>                  # retrieve files from devbox
+devbox configure-ssh <name>                                        # add to ~/.ssh/config for native ssh/scp/rsync
+devbox url access <name> [--mode <private|workspace>] -o json      # inspect or change devbox.so access
+devbox url expose <name> --port <port> [--name <purpose>] -o json  # create a persistent devbox.so URL
+devbox url get <name> (--port <port> | --name <purpose>) -o json   # retrieve an exposed URL
+devbox url list <name> -o json                                     # list exposed URLs
+devbox url unexpose <name> (--port <port> | --name <purpose>)      # remove an exposed URL
+devbox port-forward <name> --ports <local:remote,...>              # forward devbox ports to localhost (e.g. a dev server or DB)
+devbox expire <name> --force                                       # tear down a devbox
 ```
 
-**Reaching services inside a devbox** Use `devbox port-forward` to expose a port from the devbox on your laptop - useful for hitting a dev server, database, or any other service running inside. Example: `devbox port-forward my-box --ports 3000:3000,5432:5432` maps a dev server to `localhost:3000` and Postgres to `localhost:5432`. The command blocks the terminal until Ctrl+C, so run it in a dedicated terminal or as a background process.
+**Important** These `devbox url` commands require devbox CLI v0.0.182 or newer. Check with `devbox version`; if the installed version is older, run `devbox update` before using them.
+
+**Choose who can open `devbox.so` URLs** Each devbox has one access mode shared by all of its exposed URLs:
+
+- `private` - only the devbox owner.
+- `workspace` - members of the same Namespace workspace.
+
+The URL mode initially follows the general devbox access mode, but is configured separately afterward. Changing URL access does not grant or remove SSH, exec, or file access to the devbox.
+
+Inspect or change the Devbox-wide URL mode independently:
+
+```bash
+devbox url access my-box -o json
+devbox url access my-box --mode workspace -o json
+```
+
+**Important** `devbox url expose ... --access <mode>` changes this same Devbox-wide setting while exposing a port. It affects every existing and future exposed URL on that devbox; it does not set access only for the new URL. Per-URL access modes are not supported. If URLs need different audiences, ask before changing access or use a separate devbox.
+
+**Share web work with teammates** When the user intends work running in a devbox to be reviewable by teammates, expose its port with `--access workspace` and return the resulting `devbox.so` URL. The URL remains available after the command exits. Pass `--name` when the port's purpose is known so the URL is easier to retrieve and remove later. Prefer JSON output for agent workflows.
+
+```bash
+devbox url expose my-box --port 3000 --name web --access workspace -o json
+```
+
+If the user has not asked to share, omit `--access` and preserve the current mode. When sharing intent is unclear, inspect the mode and do not broaden access. If the user explicitly requires every exposed URL on the devbox to be owner-only, set `private` before exposing the new port:
+
+```bash
+devbox url access my-box --mode private -o json
+devbox url expose my-box --port 3000 --name web -o json
+```
+
+For local-only access or non-web services, use `devbox port-forward`. Example: `devbox port-forward my-box --ports 3000:3000,5432:5432` maps ports to `localhost:3000` and `localhost:5432`. The command blocks the terminal until Ctrl+C, so run it in a dedicated terminal or as a background process.
 
 Whether and when to call `devbox expire` depends on the caller's intent - the test-suite workflow in [references/devboxes-run-tests.md](references/devboxes-run-tests.md) tears down at the end; other use cases may keep the devbox alive.
 
